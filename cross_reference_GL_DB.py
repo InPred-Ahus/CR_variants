@@ -281,6 +281,11 @@ def plot_intersection_heatmap(
         dtype=float,
     )
 
+    # Mask lower triangle to show only upper triangle (including diagonal)
+    # to avoid redundancy in this symmetric matrix
+    mask = np.tril(np.ones_like(mat, dtype=bool), k=-1)
+    mat_masked = np.ma.array(mat, mask=mask)
+
     # White → deep-blue colormap
     cmap = mcolors.LinearSegmentedColormap.from_list(
         "white_to_blue", ["#ffffff", "#1565C0"]
@@ -329,19 +334,22 @@ def plot_intersection_heatmap(
 
     # ── Heatmap ───────────────────────────────────────────────────────────────
     # imshow: pixel (j, i) = mat[i, j]; row 0 displayed at top by default.
+    # Use masked array to show only upper triangle (including diagonal)
     im = ax_heat.imshow(
-        mat, cmap=cmap, vmin=0, vmax=vmax,
+        mat_masked, cmap=cmap, vmin=0, vmax=vmax,
         aspect="auto", interpolation="nearest",
     )
     # Cell text with adaptive colour (white on dark cells, charcoal on light)
+    # Only draw labels for unmasked (upper triangle + diagonal) cells
     for i in range(n):
         for j in range(n):
-            brightness = mat[i, j] / vmax if vmax > 0 else 0
-            tc = "white" if brightness > 0.55 else "#1a1a1a"
-            ax_heat.text(
-                j, i, str(int(mat[i, j])),
-                ha="center", va="center", fontsize=8.5, color=tc,
-            )
+            if i <= j:  # Upper triangle and diagonal only
+                brightness = mat[i, j] / vmax if vmax > 0 else 0
+                tc = "white" if brightness > 0.55 else "#1a1a1a"
+                ax_heat.text(
+                    j, i, str(int(mat[i, j])),
+                    ha="center", va="center", fontsize=8.5, color=tc,
+                )
 
     ax_heat.set_xticks(x_pos)
     ax_heat.set_xticklabels(sample_ids, rotation=45, ha="right", fontsize=9)
