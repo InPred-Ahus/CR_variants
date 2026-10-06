@@ -1,0 +1,81 @@
+name: CR_variants - Test with uv
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-with-uv:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v2
+
+    - name: Install dependencies
+      run: uv sync --locked
+
+    - name: Run cross_reference_GL_DB.py - Basic example
+      run: |
+        uv run cross_reference_GL_DB.py \
+          --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+          --output_dir /tmp/cr_variants_test_basic
+
+    - name: Verify basic output files
+      run: |
+        test -f /tmp/cr_variants_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv || exit 1
+        test -f /tmp/cr_variants_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_cross_reference_table.tsv || exit 1
+        test -f /tmp/cr_variants_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_heatmap.pdf || exit 1
+        echo "All basic outputs verified"
+
+    - name: Display intersection matrix
+      run: |
+        echo "=== Intersection Matrix ==="
+        cat /tmp/cr_variants_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv
+
+    - name: Run with custom VAF threshold
+      run: |
+        uv run cross_reference_GL_DB.py \
+          --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+          --VAF_th 0.001 \
+          --output_dir /tmp/cr_variants_test_vaf
+
+    - name: Verify custom VAF output files
+      run: |
+        test -f /tmp/cr_variants_test_vaf/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv || exit 1
+        echo "Custom VAF threshold test passed"
+
+    - name: Run with --tmp flag for per-sample tables
+      run: |
+        uv run cross_reference_GL_DB.py \
+          --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+          --output_dir /tmp/cr_variants_test_tmp \
+          --tmp
+
+    - name: Verify per-sample output files
+      run: |
+        test -f /tmp/cr_variants_test_tmp/AU565-D01-C01-X06_GL_DB_filtered_variants.tsv || exit 1
+        test -f /tmp/cr_variants_test_tmp/BT20-D01-C01-X06_GL_DB_filtered_variants.tsv || exit 1
+        echo "Per-sample table files verified"
+
+    - name: Upload test outputs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cr_variants-test-outputs
+        path: /tmp/cr_variants_test_basic/
+        retention-days: 7

@@ -1,0 +1,9 @@
+# Field formats:					
+# - TMB: TMB (elligible_variants)					
+# - MSI: percentage_of_unstable_MSI_sites (unstable_MSI_site_count/usable_MSI_site_count)					
+# - gene_amplifications: gene (fold_change)					
+# - splice_variants: gene[affected_exon] (breakpoint_gene_1-breakpoint_gene_2) splice_supporting_reads/reference_reads					
+# - fusions: gene_1-gene_2 (breakpoint_gene_1-breakpoint_gene_2) fusion_supporting_reads/ref_reads_gene_1/ref_reads_gene_2					
+sample_id	TMB	MSI	gene_amplifications	splice_variants	fusions
+MCF7-D01-C01-X06	9.4 (12)	4.40 (4/91)	NRAS (4.392)|MDM4 (1.762)|RAF1 (1.591)|PIK3CA (1.474)|FGFR4 (1.546)|MYC (2.389)|RPS6KB1 (13.171)	NA	NA
+MCF7-R03-C01-X06	NA	NA	NA	NA	ESR1-CCDC170 (chr6:152023138-chr6:151894307) 50/66/0|RPS6KB1-VMP1 (chr17:57987972-chr17:57915656) 70/6233/2|RPS6KB1-VMP1 (chr17:57992062-chr17:57917127) 802/3478/6
