@@ -1,0 +1,97 @@
+BootStrap: docker
+From: python:3.12-slim
+
+%labels
+    org.opencontainers.image.title       "CR_variants"
+    org.opencontainers.image.description "Cross-reference GL_DB variants across TSOPPI samples for contamination detection"
+    org.opencontainers.image.version     "1.0"
+    org.opencontainers.image.authors     "CR_variants contributors"
+
+%environment
+    export PATH="/root/.local/bin:/opt/cr_variants:$PATH"
+    export PYTHONUNBUFFERED=1
+
+%post
+    # Update package list and install system dependencies
+    apt-get update && apt-get install -y \
+        ca-certificates \
+        curl \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install uv (fast Python package manager)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Create application directory
+    mkdir -p /opt/cr_variants
+    cd /opt/cr_variants
+
+    # Install dependencies via uv using locked versions from uv.lock
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --frozen
+
+%files
+    # Bundle application code and dependencies lock file into the container
+    cross_reference_GL_DB.py /opt/cr_variants/
+    data/ /opt/cr_variants/data/
+    pyproject.toml /opt/cr_variants/
+    uv.lock /opt/cr_variants/
+
+%test
+    # Smoke test: verify dependencies and basic functionality
+    export UV_CACHE_DIR=/tmp/uv-cache
+    cd /opt/cr_variants && uv run python -c "import polars; import matplotlib; import numpy; import pandas; print('✓ All dependencies available')"
+
+%runscript
+    # Execute the script via uv (which activates the virtual environment)
+    cd /opt/cr_variants && exec uv run cross_reference_GL_DB.py "$@"
+
+%help
+    ========================================================================
+    CR_variants: Cross-reference GL_DB variants across TSOPPI samples
+    ========================================================================
+
+    A containerized tool for identifying shared rare (GL_DB) germline-database 
+    variants across samples in a TSOPPI bioinformatics run. Useful for 
+    contamination detection and sample relatedness analysis.
+
+    USAGE EXAMPLES:
+
+    1. Basic run with default parameters (VAF threshold = 0.0005):
+       apptainer run cr_variants.sif \
+           --TSOPPI_folder /path/to/251211_NB552811_0117_AHTJM2BGYX
+
+    2. Custom output directory:
+       apptainer run cr_variants.sif \
+           --TSOPPI_folder /path/to/run \
+           --output_dir ./results
+
+    3. Stricter VAF threshold and per-sample tables:
+       apptainer run cr_variants.sif \
+           --TSOPPI_folder /path/to/run \
+           --VAF_th 0.001 \
+           --output_dir ./results \
+           --tmp
+
+    4. Interactive shell:
+       apptainer shell cr_variants.sif
+
+    5. Bind additional host directories (e.g., in HPC/TSD environments):
+       apptainer run -B /tsd/p<project>/data:/mnt/data cr_variants.sif \
+           --TSOPPI_folder /mnt/data/TSO500_run
+
+    PARAMETERS:
+
+    --TSOPPI_folder  (required) Path to TSOPPI run folder
+    --VAF_th         (optional) Max 1KGP frequency; default 0.0005
+    --output_dir     (optional) Output directory; default is TSOPPI_folder
+    --tmp            (optional) Export per-sample filtered tables
+
+    OUTPUT FILES:
+
+    - {run}_GL_DB_intersection_matrix.tsv       Sample × sample count matrix
+    - {run}_GL_DB_cross_reference_table.tsv     Long-format shared variant table
+    - {run}_GL_DB_intersection_heatmap.pdf      Publication-ready visualization
+    - {sample}_GL_DB_filtered_variants.tsv      Per-sample tables (with --tmp)
+
+    For full documentation, visit the repository README or run:
+    apptainer run cr_variants.sif --help
