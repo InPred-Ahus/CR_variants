@@ -8,7 +8,6 @@ From: python:3.12-slim
     org.opencontainers.image.authors     "CR_variants contributors"
 
 %environment
-    export PATH="/root/.local/bin:/opt/cr_variants:$PATH"
     export PYTHONUNBUFFERED=1
 
 %post
@@ -18,16 +17,17 @@ From: python:3.12-slim
         curl \
         && rm -rf /var/lib/apt/lists/*
 
-    # Install uv (fast Python package manager)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Install uv to system location (not /root/.local/bin)
+    curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh
+    mv /root/.local/bin/uv /usr/local/bin/uv
+    mv /root/.local/bin/uvx /usr/local/bin/uvx
 
     # Create application directory
     mkdir -p /opt/cr_variants
     cd /opt/cr_variants
 
-    # Install dependencies via uv using locked versions from uv.lock
-    export PATH="/root/.local/bin:$PATH"
-    uv sync --frozen
+    # Install dependencies via uv directly to system Python
+    uv pip install --system --no-cache .
 
 %files
     # Bundle application code and dependencies lock file into the container
@@ -38,12 +38,11 @@ From: python:3.12-slim
 
 %test
     # Smoke test: verify dependencies and basic functionality
-    export UV_CACHE_DIR=/tmp/uv-cache
-    cd /opt/cr_variants && uv run python -c "import polars; import matplotlib; import numpy; import pandas; print('✓ All dependencies available')"
+    python -c "import polars; import matplotlib; import numpy; import pandas; print('✓ All dependencies available')"
 
 %runscript
-    # Execute the script via uv (which activates the virtual environment)
-    cd /opt/cr_variants && exec uv run cross_reference_GL_DB.py "$@"
+    # Execute the script with system Python
+    cd /opt/cr_variants && exec python cross_reference_GL_DB.py "$@"
 
 %help
     ========================================================================
