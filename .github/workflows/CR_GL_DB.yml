@@ -31,28 +31,30 @@ jobs:
 
     - name: Run cross_reference_GL_DB.py - Basic example
       run: |
+        mkdir -p TEST/cr_variants_test_basic                                         ;
         uv run cross_reference_GL_DB.py                                              \
           --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --output_dir /tmp/cr_variants_test_basic
+          --output_dir TEST/cr_variants_test_basic
 
     - name: Display intersection matrix
       run: |
         echo "=== Intersection Matrix ==="
-        cat /tmp/cr_variants_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv
+        cat TEST/cr_variants_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv
 
     - name: Run with custom VAF threshold
       run: |
+        mkdir -p TEST/cr_variants_test_vaf                                           ;
         uv run cross_reference_GL_DB.py                                              \
           --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
           --VAF_th 0.001                                                             \
-          --output_dir /tmp/cr_variants_test_vaf
+          --output_dir TEST/cr_variants_test_vaf
 
 
     - name: Run with --tmp flag for per-sample tables
       run: |
         uv run cross_reference_GL_DB.py                                              \
           --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --output_dir /tmp/cr_variants_test_tmp                                     \
+          --output_dir TEST/cr_variants_test_tmp                                     \
           --tmp
 
 
@@ -61,5 +63,5 @@ jobs:
       if: always()
       with:
         name: cr_variants-test-outputs
-        path: /tmp/cr_variants_test_basic/
+        path: TEST/cr_variants_test_basic/
         retention-days: 7
