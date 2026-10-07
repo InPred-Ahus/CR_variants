@@ -26,11 +26,12 @@ jobs:
 
     - name: Build and Run Apptainer image 
       run: |
-        apptainer build container/cr_variants.sif container/cr_variants.def
+        ls -la
+        apptainer build $(pwd)/container/cr_variants.sif $(pwd)/container/cr_variants.def
 
         apptainer run \
-          -B data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX:/data \
-          container/cr_variants.sif \
+          -B $(pwd)/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX:/data \
+          $(pwd)/container/cr_variants.sif \
           --TSOPPI_folder /data \
           --output_dir /tmp/output
 
