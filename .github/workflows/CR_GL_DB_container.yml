@@ -26,14 +26,13 @@ jobs:
 
     - name: Build and Run Apptainer image 
       run: |
-        ls -la
         apptainer build $(pwd)/container/cr_variants.sif $(pwd)/container/cr_variants.def
 
-        apptainer run \
+        apptainer run                                                                \
           -B $(pwd)/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX:/data \
-          $(pwd)/container/cr_variants.sif \
-          --TSOPPI_folder /data \
-          --output_dir /tmp/output
+          $(pwd)/container/cr_variants.sif                                           \
+          --TSOPPI_folder /data                                                      \
+          --output_dir /tmp/output                                                   ;
 
     - name: Upload SIF artifact
       uses: actions/upload-artifact@v4
