@@ -12,9 +12,10 @@ Variants with no AF_TUMOR value (AF_TUMOR = "NA") are excluded from analysis.
 Usage
 -----
     uv run cross_reference_GL_DB.py \\
-        --TSOPPI_folder PATH \\
-        [--VAF_th 0.0005] \\
-        [--output_dir PATH] \\
+        --TSOPPI_folder PATH        \\
+        [--alias NAME]              \\
+        [--VAF_th 0.02]             \\
+        [--output_dir PATH]         \\
         [--tmp]
 
 Output (all written to output_dir, default: TSOPPI_folder)
@@ -48,6 +49,13 @@ def parse_args() -> argparse.Namespace:
             "Cross-reference rare GL_DB variants across samples in a TSOPPI run folder."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--alias",
+        type=str,
+        default="CR_GL_DB",
+        metavar="STR",
+        help="Alias/name for this analysis run. Used in plot title and output file names.",
     )
     parser.add_argument(
         "--VAF_th",
@@ -249,6 +257,7 @@ def plot_intersection_heatmap(
     output_path: Path,
     run_name: str,
     vaf_th: float,
+    alias: str,
 ) -> None:
     """
     Composite figure: barplot of per-sample rare variant counts (top panel) and
@@ -321,8 +330,8 @@ def plot_intersection_heatmap(
     ax_bar.tick_params(labelbottom=False)
     ax_bar.set_ylabel("Variant count", fontsize=10)
     ax_bar.set_title(
-        f"{run_name}  —  GL_DB rare variants (VAF ≤ {vaf_th})",
-        fontsize=11, pad=8, loc="left",
+        f"{alias} — GL_DB variants (AF ≤ {vaf_th})",
+        fontsize=14, pad=12, loc="center", fontweight="bold",
     )
     ax_bar.spines[["top", "right"]].set_visible(False)
     ax_bar.yaxis.grid(True, color="#e0e0e0", linestyle="--", linewidth=0.7,
@@ -445,7 +454,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     sample_counts = {sid: df.height for sid, df in filtered.items()}
     heatmap_path  = output_dir / f"{run_name}_GL_DB_intersection_heatmap.pdf"
-    plot_intersection_heatmap(matrix, sample_counts, heatmap_path, run_name, args.VAF_th)
+    plot_intersection_heatmap(matrix, sample_counts, heatmap_path, run_name, args.VAF_th, args.alias)
 
 
 if __name__ == "__main__":

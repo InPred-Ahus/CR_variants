@@ -34,6 +34,7 @@ jobs:
         mkdir -p TEST/cr_variants_test_basic                                         ;
         uv run cross_reference_GL_DB.py                                              \
           --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+          --alias "Test_Run_Basic"                                                   \
           --output_dir TEST/cr_variants_test_basic
 
     - name: Display intersection matrix
@@ -46,6 +47,7 @@ jobs:
         mkdir -p TEST/cr_variants_test_vaf                                           ;
         uv run cross_reference_GL_DB.py                                              \
           --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+          --alias "Test_Run_Custom_VAF"                                              \
           --VAF_th 0.001                                                             \
           --output_dir TEST/cr_variants_test_vaf
 
@@ -54,6 +56,7 @@ jobs:
       run: |
         uv run cross_reference_GL_DB.py                                              \
           --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+          --alias "Test_Run_Tmp"                                                     \
           --output_dir TEST/cr_variants_test_tmp                                     \
           --tmp
 
