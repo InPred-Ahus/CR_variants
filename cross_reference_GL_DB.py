@@ -3,12 +3,11 @@
 cross_reference_GL_DB.py
 
 For each sample in a TSOPPI run folder, filters PCGR variant calls to GL_DB
-variants below a given 1000 Genomes population AF threshold, then cross-
-references those rare germline-database variants across all samples to
+variants below a given tumor allele frequency (AF_TUMOR) threshold, then cross-
+references those filtered germline-database variants across all samples to
 produce a pairwise intersection matrix and a combined visualisation.
 
-Variants with no 1KGP entry (GLOBAL_AF_1KG = "NA") are treated as absent
-from the population and therefore pass the frequency filter.
+Variants with no AF_TUMOR value (AF_TUMOR = "NA") are excluded from analysis.
 
 Usage
 -----
@@ -53,10 +52,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--VAF_th",
         type=float,
-        default=0.0005,
+        default=0.02,
         metavar="FLOAT",
-        help="Maximum GLOBAL_AF_1KG for rare variant selection. "
-             "Variants absent from 1KGP (NA) always pass.",
+        help="Maximum AF_TUMOR threshold for variant selection. "
+             "Variants with missing AF_TUMOR are excluded.",
     )
     parser.add_argument(
         "--output_dir",
@@ -136,10 +135,9 @@ def discover_pcgr_files(run_folder: Path) -> dict[str, Path]:
 def load_and_filter(tsv_path: Path, vaf_th: float) -> pl.DataFrame:
     """
     Read a PCGR tiers TSV and return rows that satisfy:
-        TAL == "GL_DB"  AND  GLOBAL_AF_1KG is present  AND  GLOBAL_AF_1KG <= vaf_th
+        TAL == "GL_DB"  AND  AF_TUMOR is present  AND  AF_TUMOR <= vaf_th
 
-    Rows with a missing GLOBAL_AF_1KG value are excluded because they cannot
-    be reliably classified as rare by population frequency.
+    Rows with a missing AF_TUMOR value are excluded from analysis.
 
     Only the columns in _VARIANT_COLS are retained in the result.
     """
@@ -155,8 +153,8 @@ def load_and_filter(tsv_path: Path, vaf_th: float) -> pl.DataFrame:
         df
         .filter(
             (pl.col("TAL") == "GL_DB")
-            & pl.col("GLOBAL_AF_1KG").is_not_null()
-            & (pl.col("GLOBAL_AF_1KG") <= vaf_th)
+            & pl.col("AF_TUMOR").is_not_null()
+            & (pl.col("AF_TUMOR") <= vaf_th)
         )
         .select(_VARIANT_COLS)
     )
@@ -403,7 +401,7 @@ def main() -> None:
         print(
             f"\n{'='*70}\n"
             f"Sample : {sample_id}\n"
-            f"Filter : TAL == GL_DB  AND  GLOBAL_AF_1KG present  AND  GLOBAL_AF_1KG <= {args.VAF_th}\n"
+            f"Filter : TAL == GL_DB  AND  AF_TUMOR present  AND  AF_TUMOR <= {args.VAF_th}\n"
             f"Hits   : {df.height}\n"
             f"{'='*70}"
         )
