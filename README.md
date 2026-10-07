@@ -4,11 +4,10 @@ Cross-reference rare germline-database (GL_DB) variants across samples in a TSOP
 
 ## Overview
 
-`cross_reference_GL_DB.py` filters PCGR variant calls from each sample to identify GL_DB variants with low population frequency (1000 Genomes Project ≤ VAF threshold), then computes a pairwise intersection matrix showing how many rare variants are shared between samples.
+`cross_reference_GL_DB.py` filters variant calls from each sample to identify GL_DB variants with a given tumor allele frequency (AF_TUMOR threshold), then computes a pairwise intersection matrix showing how many variants are shared between samples.
 
 **Key features:**
-- Filters GL_DB variants by population allele frequency
-- Excludes variants with missing frequency data (robust population-based classification)
+- Filters GL_DB variants by tumor allele frequency
 - Generates per-sample filtered variant tables (optional)
 - Produces cross-reference long-format table of shared variants
 - Creates intersection count matrix (N × N samples)
@@ -25,22 +24,61 @@ uv sync  # Install dependencies from pyproject.toml
 
 Dependencies: `polars`, `matplotlib`, `numpy`, `pandas`
 
+## Container Setup (for offline/HPC environments like TSD)
+
+For systems with limited internet access (e.g., TSD secure data enclaves), a self-contained Apptainer SIF image is available.
+
+### Build the container (requires internet access; do this outside TSD)
+
+```bash
+apptainer build cr_variants.sif container/cr_variants.def
+```
+
+The resulting `cr_variants.sif` file (~200 MB) is fully self-contained with all Python dependencies embedded.
+
+### Transfer to TSD or offline system
+
+Use your institution's file transfer mechanism (e.g., TSD import portal) to upload `cr_variants.sif` to the secure environment.
+
+### Run in TSD or offline system
+
+```bash
+# Basic usage
+apptainer run cr_variants.sif \
+    --TSOPPI_folder /path/to/data/TSO500_run \
+    --output_dir /path/to/output
+
+# Interactive shell
+apptainer shell cr_variants.sif
+
+# Bind additional directories if needed
+apptainer run -B /tsd/p<project>/data:/data cr_variants.sif \
+    --TSOPPI_folder /data/TSO500_run \
+    --output_dir /data/output
+```
+
+**Advantages of container approach:**
+- No dependency installation needed in TSD (all embedded in SIF)
+- Reproducible across different HPC systems
+- Single file transfer (vs. transferring code + dependencies)
+
 ## Usage
 
 ### Basic example
 
 ```bash
 uv run cross_reference_GL_DB.py \
-    --TSOPPI_folder /path/to/251211_NB552811_0117_AHTJM2BGYX
+    --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX
 ```
 
 ### Full example with all options
 
 ```bash
-uv run cross_reference_GL_DB.py \
-    --TSOPPI_folder /path/to/251211_NB552811_0117_AHTJM2BGYX \
-    --VAF_th 0.001 \
-    --output_dir ./results \
+uv run cross_reference_GL_DB.py                                                \
+    --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+    --alias "251211_NB552811_0117_AHTJM2BGYX"                                  \
+    --VAF_th 0.001                                                             \
+    --output_dir ./results                                                     \
     --tmp
 ```
 
@@ -49,7 +87,8 @@ uv run cross_reference_GL_DB.py \
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `--TSOPPI_folder` | PATH | **required** | Path to the TSOPPI run folder containing per-sample subdirectories (e.g., `AU565-D01-C01-X06/`, `BT20-D01-C01-X06/`). Directories ending with `_metrics_plots` are automatically ignored. |
-| `--VAF_th` | FLOAT | `0.0005` | Maximum 1000 Genomes Project allele frequency (VAF) threshold for rare variant selection. Only variants with GLOBAL_AF_1KG ≤ this value are retained. Variants with missing frequency data are excluded. |
+| `--alias` | STR | `CR_GL_DB` | Alias/name for this analysis run. Used in the plot title and can help distinguish multiple runs. Example: `"Project_A_Cohort1"` or `"Batch_20240101"`. |
+| `--VAF_th` | FLOAT | `0.02` | Maximum tumor allele frequency (AF_TUMOR) threshold for variant selection. Only variants with AF_TUMOR ≤ this value are retained. Variants with missing AF_TUMOR are excluded. |
 | `--output_dir` | PATH | (same as TSOPPI_folder) | Directory where all output files are written. Created if absent. Defaults to the input TSOPPI_folder. |
 | `--tmp` | flag | off | When set, also exports per-sample filtered variant tables as individual TSV files for further analysis. Useful for inspection and downstream processing. |
 
@@ -127,9 +166,10 @@ If BT20-D01-C01-X06 and HCC22118-D01-C01-X06 share rare variants (non-zero off-d
 ## Example workflow
 
 ```bash
-# 1. Run analysis with default parameters
+# 1. Run analysis with descriptive alias
 uv run cross_reference_GL_DB.py \
-    --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX
+    --TSOPPI_folder data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
+    --alias "TSOPPI_Cohort_001"
 
 # 2. Review results
 cat data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv
@@ -144,7 +184,8 @@ open data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX/251211_NB552811_
 
 ## Notes
 
-- **Filter logic:** Rows retained must satisfy: `TAL == "GL_DB"` AND `GLOBAL_AF_1KG is not null` AND `GLOBAL_AF_1KG ≤ VAF_th`
-- **Missing frequency data:** Variants with no 1000 Genomes entry (GLOBAL_AF_1KG = "NA") are excluded to ensure population-based rarity classification
+- **Filter logic:** Rows retained must satisfy: `TAL == "GL_DB"` AND `AF_TUMOR is not null` AND `AF_TUMOR ≤ VAF_th`
+- **Missing frequency data:** Variants with no AF_TUMOR value (AF_TUMOR = "NA") are excluded to ensure robust analysis
+- **Alias in output:** The `--alias` parameter appears in the plot title to help distinguish between multiple analysis runs. For example, `--alias "Run_A"` produces title: `Run_A — GL_DB variants (AF ≤ 0.02)`
 - **Performance:** Runtime scales with variant count and sample count; typical runs (5 samples, ~100 rare variants each) complete in seconds
 - **File discovery:** Script automatically locates PCGR tiers TSV files using the pattern `{sample_id}_PCGR_*_all/{sample_id}.pcgr_acmg.grch37.snvs_indels.tiers.tsv`
