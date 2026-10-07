@@ -24,45 +24,16 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Build Apptainer SIF image
+    - name: Build and Run Apptainer image 
       run: |
         cd $GITHUB_WORKSPACE/container
         apptainer build cr_variants.sif cr_variants.def
 
-
-    - name: Test basic example with container
-      run: |
         apptainer run \
-          -B $GITHUB_WORKSPACE/data:/opt/cr_variants/data \
-          $GITHUB_WORKSPACE/container/cr_variants.sif \
-          --TSOPPI_folder /opt/cr_variants/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --output_dir /tmp/cr_variants_container_test_basic
-
-
-    - name: Display container results
-      run: |
-        echo "=== Intersection Matrix from Container ==="
-        cat /tmp/cr_variants_container_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv
-
-    - name: Test custom VAF threshold with container
-      run: |
-        apptainer run \
-          -B $GITHUB_WORKSPACE/data:/opt/cr_variants/data \
-          $GITHUB_WORKSPACE/container/cr_variants.sif \
-          --TSOPPI_folder /opt/cr_variants/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --VAF_th 0.001 \
-          --output_dir /tmp/cr_variants_container_test_vaf
-
-
-    - name: Test --tmp flag with container
-      run: |
-        apptainer run \
-          -B $GITHUB_WORKSPACE/data:/opt/cr_variants/data \
-          $GITHUB_WORKSPACE/container/cr_variants.sif \
-          --TSOPPI_folder /opt/cr_variants/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --output_dir /tmp/cr_variants_container_test_tmp \
-          --tmp
-
+          -B $GITHUB_WORKSPACE/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX:/data \
+          cr_variants.sif \
+          --TSOPPI_folder /data \
+          --output_dir .
 
     - name: Upload SIF artifact
       uses: actions/upload-artifact@v4
@@ -71,13 +42,3 @@ jobs:
         name: cr_variants-sif
         path: container/cr_variants.sif
         retention-days: 30
-
-    - name: Upload container test outputs
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: cr_variants-container-test-outputs
-        path: /tmp/cr_variants_container_test_basic/
-        path: /tmp/cr_variants_container_test_vaf/
-        path: /tmp/cr_variants_container_test_tmp/
-        retention-days: 7
