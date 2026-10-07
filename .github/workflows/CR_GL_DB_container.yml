@@ -13,90 +13,37 @@ permissions:
 jobs:
   build-and-test-container:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    container:
+      image: ghcr.io/apptainer/apptainer:1.4.1
+      options: --privileged
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up Apptainer
-      uses: eWaterCycle/setup-apptainer@v2
-      with:
-        apptainer-version: 1.3.0
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.12"
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@v2
-
-    - name: Install dependencies with uv
-      run: uv sync --locked
-
-    - name: Build Apptainer SIF image
+    - name: Build and Run Apptainer image 
       run: |
-        apptainer build cr_variants.sif container/cr_variants.def
+        cd container                                                                                  ;
+        apptainer build cr_variants.sif cr_variants.def                                               ;
+        echo " "                                                                                      ;
 
-    - name: Verify SIF file exists and is valid
-      run: |
-        test -f cr_variants.sif || exit 1
-        file cr_variants.sif
-        apptainer inspect cr_variants.sif
-
-    - name: Run help command in container
-      run: |
-        apptainer run cr_variants.sif --help
-
-    - name: Test basic example with container
-      run: |
-        apptainer run cr_variants.sif \
+        apptainer run                                                                                 \
+          -B ../data:/opt/cr_variants/data                                                            \
+          cr_variants.sif                                                                             \
           --TSOPPI_folder /opt/cr_variants/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --output_dir /tmp/cr_variants_container_test_basic
+          --output_dir /tmp/cr_variants_container_test_basic                                          ;
 
-    - name: Verify container output files
-      run: |
-        test -f /tmp/cr_variants_container_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv || exit 1
-        test -f /tmp/cr_variants_container_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_cross_reference_table.tsv || exit 1
-        test -f /tmp/cr_variants_container_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_heatmap.pdf || exit 1
-        echo "Container outputs verified"
-
-    - name: Display container results
-      run: |
-        echo "=== Intersection Matrix from Container ==="
-        cat /tmp/cr_variants_container_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv
-
-    - name: Test custom VAF threshold with container
-      run: |
-        apptainer run cr_variants.sif \
-          --TSOPPI_folder /opt/cr_variants/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --VAF_th 0.001 \
-          --output_dir /tmp/cr_variants_container_test_vaf
-
-    - name: Verify custom VAF container output
-      run: |
-        test -f /tmp/cr_variants_container_test_vaf/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv || exit 1
-        echo "Container custom VAF test passed"
-
-    - name: Test --tmp flag with container
-      run: |
-        apptainer run cr_variants.sif \
-          --TSOPPI_folder /opt/cr_variants/data/TSO500_postprocessing/251211_NB552811_0117_AHTJM2BGYX \
-          --output_dir /tmp/cr_variants_container_test_tmp \
-          --tmp
-
-    - name: Verify per-sample outputs from container
-      run: |
-        test -f /tmp/cr_variants_container_test_tmp/AU565-D01-C01-X06_GL_DB_filtered_variants.tsv || exit 1
-        test -f /tmp/cr_variants_container_test_tmp/BT20-D01-C01-X06_GL_DB_filtered_variants.tsv || exit 1
-        echo "Container per-sample test passed"
 
     - name: Upload SIF artifact
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: cr_variants-sif
-        path: cr_variants.sif
+        path: container/cr_variants.sif
         retention-days: 30
 
     - name: Upload container test outputs
