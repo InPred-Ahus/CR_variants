@@ -2,12 +2,20 @@
 """
 cross_reference_GL_DB.py
 
-For each sample in a TSOPPI run folder, filters PCGR variant calls to GL_DB
-variants below a given tumor allele frequency (AF_TUMOR) threshold, then cross-
-references those filtered germline-database variants across all samples to
-produce a pairwise intersection matrix and a combined visualisation.
+Identify rare GL_DB germline-database variants in a TSOPPI run and detect
+cross-sample contamination by comparing low-VAF variants in each sample against
+all GL_DB variants in every other sample.
 
-Variants with no AF_TUMOR value (AF_TUMOR = "NA") are excluded from analysis.
+Algorithm
+---------
+1. Per-sample: retain GL_DB variants with AF_TUMOR <= VAF_th  (reference set)
+2. Per-sample: load all GL_DB variants regardless of VAF       (query set)
+3. Cross-reference: for each (ref, query) pair, look up ref's filtered variants
+   in query's complete data — no second VAF filter is applied on lookup
+4. Report intersection counts and visualise as heatmap + VAF matrix
+
+This design exposes cases where a variant is rare in one sample (low VAF) but
+present at any frequency in another, which is the contamination signal of interest.
 
 Usage
 -----
@@ -18,16 +26,14 @@ Usage
         [--output_dir PATH]         \\
         [--tmp]
 
-Output (all written to output_dir, default: TSOPPI_folder)
-----------------------------------------------------------
+Outputs (written to output_dir, default: TSOPPI_folder)
+-------------------------------------------------------
     {run}_GL_DB_cross_reference_table.tsv   long-format shared-variant table
     {run}_GL_DB_intersection_matrix.tsv     N x N count matrix
-    {run}_GL_DB_intersection_heatmap.pdf    combined barplot + heatmap figure
-    {sample}_GL_DB_filtered_variants.tsv    per-sample tables (--tmp only)
+    {run}_GL_DB_intersection_heatmap.pdf    barplot + intersection heatmap
+    {run}_GL_DB_variant_sample_heatmap.pdf  VAF heatmap (overlap variants only)
+    {sample}_GL_DB_filtered_variants.tsv    per-sample filtered tables (--tmp)
 """
-
-from __future__ import annotations
-
 import argparse
 import sys
 from pathlib import Path
@@ -35,13 +41,13 @@ from pathlib import Path
 import polars as pl
 
 # Columns retained throughout the analysis
-_VARIANT_COLS = ["TAL", "AF_TUMOR", "GLOBAL_AF_1KG", "GENOMIC_CHANGE", "SYMBOL", "VCF_SAMPLE_ID"]
-_XREF_COLS    = ["TAL", "AF_TUMOR", "GLOBAL_AF_1KG", "GENOMIC_CHANGE", "SYMBOL", "sampleID_reference", "sampleID_query"]
+_VARIANT_COLS = ["TAL", "AF_TUMOR", "GENOMIC_CHANGE", "SYMBOL", "VCF_SAMPLE_ID"]
+_XREF_COLS    = ["TAL", "AF_TUMOR", "GENOMIC_CHANGE", "SYMBOL", "sampleID_reference", "sampleID_query"]
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# ----------------------------- #
+# Command-line argument parsing # 
+# ----------------------------- #
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -53,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--alias",
         type=str,
-        default="CR_GL_DB",
+        default="cross-ref_GL_DB",
         metavar="STR",
         help="Alias/name for this analysis run. Used in plot title and output file names.",
     )
@@ -87,6 +93,9 @@ def parse_args() -> argparse.Namespace:
         help="Path to the TSOPPI run folder containing per-sample subdirectories.",
     )
     return parser.parse_args()
+
+
+# Revisado hasta aqui
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +181,51 @@ def load_and_filter(tsv_path: Path, vaf_th: float) -> pl.DataFrame:
 # Cross-reference
 # ---------------------------------------------------------------------------
 
-def build_cross_reference_table(filtered: dict[str, pl.DataFrame]) -> pl.DataFrame:
+def load_complete_gl_db_data(pcgr_files: dict[str, Path]) -> dict[str, pl.DataFrame]:
+    """
+    Load complete GL_DB variants from all samples without VAF threshold filtering.
+    
+    Returns
+    -------
+    dict[sample_id] → DataFrame with all GL_DB variants (TAL=="GL_DB", AF_TUMOR present)
+    """
+    complete_data: dict[str, pl.DataFrame] = {}
+    
+    for sample_id, tsv_path in pcgr_files.items():
+        df = pl.read_csv(tsv_path, separator="\t", infer_schema_length=0)
+        
+        # Convert NA values
+        df = df.with_columns(
+            pl.col("AF_TUMOR").replace("NA", None).cast(pl.Float64),
+        )
+        
+        # Filter: TAL == GL_DB AND AF_TUMOR is present (no VAF threshold)
+        df_complete = (
+            df
+            .filter(
+                (pl.col("TAL") == "GL_DB")
+                & pl.col("AF_TUMOR").is_not_null()
+            )
+            .select(_VARIANT_COLS)
+        )
+        
+        complete_data[sample_id] = df_complete
+    
+    return complete_data
+
+
+# ---------------------------------------------------------------------------
+# Cross-reference
+# ---------------------------------------------------------------------------
+
+def build_cross_reference_table(
+    filtered: dict[str, pl.DataFrame],
+    complete: dict[str, pl.DataFrame],
+) -> pl.DataFrame:
     """
     For every (reference, query) pair where reference != query, find variants
-    (matched by GENOMIC_CHANGE) from the reference sample that are also present
-    in the query sample.
+    from the reference sample's FILTERED set (VAF <= threshold) in the query
+    sample's COMPLETE data (all GL_DB variants, no threshold).
 
     The resulting long-format table replaces VCF_SAMPLE_ID with two columns:
     sampleID_reference and sampleID_query.  Variant-level data (AF_TUMOR, etc.)
@@ -190,7 +239,7 @@ def build_cross_reference_table(filtered: dict[str, pl.DataFrame]) -> pl.DataFra
 
         ref_variants = set(ref_df["GENOMIC_CHANGE"].to_list())
 
-        for query_id, query_df in filtered.items():
+        for query_id, query_df in complete.items():
             if query_id == ref_id or query_df.is_empty():
                 continue
 
@@ -224,27 +273,117 @@ def build_cross_reference_table(filtered: dict[str, pl.DataFrame]) -> pl.DataFra
     return pl.concat(rows)
 
 
-def build_intersection_matrix(filtered: dict[str, pl.DataFrame]) -> pl.DataFrame:
+def build_intersection_matrix(
+    filtered: dict[str, pl.DataFrame],
+    complete: dict[str, pl.DataFrame],
+) -> pl.DataFrame:
     """
-    Build a sample × sample integer matrix of GL_DB variant intersection counts.
+    Build a sample × sample integer matrix of variant presence counts.
+    
+    Reference set (rows): variants from filtered data (VAF_th applied)
+    Query set (columns): variants from complete data (no VAF_th)
+    
+    Diagonal: count of filtered variants in that sample
+    Off-diagonal[ref, query]: count of ref's filtered variants found in query's complete data
 
-    Diagonal  : number of filtered GL_DB variants in that sample.
-    Off-diagonal: number of variants shared between reference row and query column.
+    Parameters
+    ----------
+    filtered : dict[sample_id] → DataFrame with variants that passed VAF_th per sample
+    complete : dict[sample_id] → DataFrame with all GL_DB variants (no VAF_th)
     """
     sample_ids = list(filtered.keys())
-    variant_sets: dict[str, set[str]] = {
-        sid: set(df["GENOMIC_CHANGE"].to_list())
-        for sid, df in filtered.items()
-    }
 
     data: dict[str, list[int]] = {"sample": sample_ids}  # type: ignore[assignment]
+    
     for query_id in sample_ids:
-        data[query_id] = [
-            len(variant_sets[ref_id] & variant_sets[query_id])
-            for ref_id in sample_ids
-        ]
+        counts = []
+        query_variants = set(complete[query_id]["GENOMIC_CHANGE"].to_list()) if not complete[query_id].is_empty() else set()
+        
+        for ref_id in sample_ids:
+            ref_variants = set(filtered[ref_id]["GENOMIC_CHANGE"].to_list()) if not filtered[ref_id].is_empty() else set()
+            # Count how many ref's filtered variants appear in query's complete data
+            counts.append(len(ref_variants & query_variants))
+        
+        data[query_id] = counts
 
     return pl.DataFrame(data)
+
+
+def build_overlap_vaf_matrix(
+    filtered: dict[str, pl.DataFrame],
+    complete: dict[str, pl.DataFrame],
+) -> tuple[list[str], list[str], dict[str, dict[str, float]]]:
+    """
+    Build a VAF matrix restricted to variants that are relevant overlaps:
+    variants that passed VAF_th in at least one reference sample AND appear
+    in at least one other sample's complete GL_DB data.
+
+    Returns
+    -------
+    variant_ids : sorted list of GENOMIC_CHANGE strings
+    sample_ids  : sorted list of sample identifiers
+    vaf_data    : dict[variant_id][sample_id] = VAF (0.0 if absent in that sample)
+    """
+    # Collect variants that passed VAF_th in any sample AND appear in another
+    relevant: set[str] = set()
+    for ref_id, ref_df in filtered.items():
+        if ref_df.is_empty():
+            continue
+        ref_variants = set(ref_df["GENOMIC_CHANGE"].to_list())
+        for query_id, query_df in complete.items():
+            if query_id == ref_id or query_df.is_empty():
+                continue
+            relevant.update(ref_variants & set(query_df["GENOMIC_CHANGE"].to_list()))
+
+    variant_ids = sorted(relevant)
+    sample_ids = sorted(complete.keys())
+
+    vaf_data: dict[str, dict[str, float]] = {v: {s: 0.0 for s in sample_ids} for v in variant_ids}
+
+    for sample_id, df in complete.items():
+        if df.is_empty() or not relevant:
+            continue
+        per_variant = (
+            df.filter(pl.col("GENOMIC_CHANGE").is_in(relevant))
+            .select(["GENOMIC_CHANGE", "AF_TUMOR"])
+            .group_by("GENOMIC_CHANGE")
+            .agg(pl.col("AF_TUMOR").max())
+        )
+        for row in per_variant.iter_rows(named=True):
+            if row["AF_TUMOR"] is not None:
+                vaf_data[row["GENOMIC_CHANGE"]][sample_id] = float(row["AF_TUMOR"])
+
+    return variant_ids, sample_ids, vaf_data
+
+
+def cluster_vaf_matrix(
+    vaf_data: dict[str, dict[str, float]],
+    variant_ids: list[str],
+    sample_ids: list[str],
+) -> tuple[list[int], list[int]]:
+    """
+    Hierarchically cluster both axes of a VAF matrix (Ward linkage, Euclidean distance).
+
+    Returns
+    -------
+    variant_order : leaf indices to reorder variants
+    sample_order  : leaf indices to reorder samples
+    """
+    import numpy as np
+    from scipy.cluster.hierarchy import dendrogram, linkage
+    from scipy.spatial.distance import pdist
+
+    matrix = np.array(
+        [[vaf_data[v][s] for s in sample_ids] for v in variant_ids],
+        dtype=float,
+    )
+
+    def _leaf_order(data: np.ndarray) -> list[int]:
+        if data.shape[0] <= 1:
+            return [0]
+        return list(dendrogram(linkage(pdist(data, metric="euclidean"), method="ward"), no_plot=True)["leaves"])
+
+    return _leaf_order(matrix), _leaf_order(matrix.T)
 
 
 # ---------------------------------------------------------------------------
@@ -269,9 +408,8 @@ def plot_intersection_heatmap(
     light grid lines, white-to-blue continuous fill scale.
     """
     import matplotlib.pyplot as plt
-    plt.switch_backend("Agg")      # force non-interactive backend; safe to call after pyplot import
+    plt.switch_backend("Agg")
     import matplotlib.gridspec as gridspec
-    import matplotlib.colors as mcolors
     import numpy as np
 
     sample_ids = matrix["sample"].to_list()
@@ -293,11 +431,16 @@ def plot_intersection_heatmap(
     mask = np.tril(np.ones_like(mat, dtype=bool), k=-1)
     mat_masked = np.ma.array(mat, mask=mask)
 
-    # White → deep-blue colormap
-    cmap = mcolors.LinearSegmentedColormap.from_list(
-        "white_to_blue", ["#ffffff", "#1565C0"]
-    )
-    vmax = mat.max()
+    # Color scale based only on off-diagonal values (contamination signals)
+    # Diagonal cells will remain white (self-counts)
+    off_diag_values = mat[~np.eye(mat.shape[0], dtype=bool)]
+    off_diag_values = off_diag_values[off_diag_values > 0]  # exclude zeros
+    # Use fixed cap of 50: provides good color differentiation for typical contamination
+    # values; any value > 50 saturates to darkest blue (still visible as concerning)
+    vmax = max(50, off_diag_values.max()) if len(off_diag_values) > 0 else 50
+
+    # Use ColorBrewer Blues: perceptually uniform, publication-quality palette
+    cmap = plt.cm.Blues
 
     # Figure geometry scales with sample count
     fig_w = max(8.0, n * 2.0)
@@ -306,7 +449,7 @@ def plot_intersection_heatmap(
     gs = gridspec.GridSpec(
         2, 1, figure=fig,
         height_ratios=[1, 3],
-        hspace=0.04,
+        hspace=0.2,
         left=0.15, right=0.92, top=0.93, bottom=0.18,
     )
     ax_bar  = fig.add_subplot(gs[0])
@@ -346,22 +489,43 @@ def plot_intersection_heatmap(
         mat_masked, cmap=cmap, vmin=0, vmax=vmax,
         aspect="auto", interpolation="nearest",
     )
+    # Manually set diagonal cells to white with neutral grey background for visual distinction
+    # This highlights diagonal (self-counts) without visual clutter
+    for i in range(n):
+        ax_heat.add_patch(
+            plt.Rectangle((i - 0.5, i - 0.5), 1, 1, 
+                         facecolor="#d2cece", edgecolor="none", zorder=1)
+        )
     # Cell text with adaptive colour (white on dark cells, charcoal on light)
-    # Only draw labels for unmasked (upper triangle + diagonal) cells
+    # Diagonal cells get bold, larger font on subtle grey background
     for i in range(n):
         for j in range(n):
             if i <= j:  # Upper triangle and diagonal only
-                brightness = mat[i, j] / vmax if vmax > 0 else 0
-                tc = "white" if brightness > 0.55 else "#1a1a1a"
-                ax_heat.text(
-                    j, i, str(int(mat[i, j])),
-                    ha="center", va="center", fontsize=8.5, color=tc,
-                )
+                is_diagonal = (i == j)
+                
+                if is_diagonal:
+                    # Diagonal: bold, larger text on grey background
+                    ax_heat.text(
+                        j, i, str(int(mat[i, j])),
+                        ha="center", va="center",
+                        fontsize=10, fontweight="bold", color="#1a1a1a",
+                    )
+                else:
+                    # Off-diagonal: standard adaptive text
+                    brightness = mat[i, j] / vmax if vmax > 0 else 0
+                    tc = "white" if brightness > 0.55 else "#1a1a1a"
+                    ax_heat.text(
+                        j, i, str(int(mat[i, j])),
+                        ha="center", va="center", fontsize=8.5, color=tc,
+                    )
 
     ax_heat.set_xticks(x_pos)
-    ax_heat.set_xticklabels(sample_ids, rotation=45, ha="right", fontsize=9)
+    ax_heat.set_xticklabels(sample_ids, rotation=35, ha="center", fontsize=8)
+    # Move x-axis tick labels to top, but keep "Query sample" label at bottom
+    ax_heat.xaxis.tick_top()
+    ax_heat.xaxis.set_label_position('bottom')
     ax_heat.set_yticks(x_pos)
-    ax_heat.set_yticklabels(sample_ids, fontsize=9)
+    ax_heat.set_yticklabels(sample_ids, fontsize=8)
     ax_heat.set_xlabel("Query sample", fontsize=10)
     ax_heat.set_ylabel("Reference sample", fontsize=10)
     ax_heat.tick_params(length=0)
@@ -377,6 +541,108 @@ def plot_intersection_heatmap(
     fig.savefig(output_path, bbox_inches="tight", dpi=150, facecolor="white")
     plt.close(fig)
     print(f"Heatmap saved to: {output_path}")
+
+
+def plot_variant_sample_heatmap(
+    vaf_data: dict[str, dict[str, float]],
+    variant_ids: list[str],
+    sample_ids: list[str],
+    variant_order: list[int],
+    sample_order: list[int],
+    output_path: Path,
+    alias: str,
+) -> None:
+    """
+    VAF heatmap: samples (rows) × variants (columns).
+    
+    Visualizes tumor allele frequencies for GL_DB variants across samples.
+    Uses blues colorbrewer palette (white=0, dark blue=high VAF).
+    Cell values show exact VAF percentages.
+    Both axes are reordered by hierarchical clustering for pattern visualization.
+    Shows only variants present in >= 2 samples for improved readability.
+    """
+    import matplotlib.pyplot as plt
+    plt.switch_backend("Agg")
+    import numpy as np
+
+    n_variants = len(variant_ids)
+    n_samples = len(sample_ids)
+
+    # Build reordered VAF matrix: samples (rows) × variants (columns)
+    reordered_variants = [variant_ids[i] for i in variant_order]
+    reordered_samples = [sample_ids[j] for j in sample_order]
+
+    vaf_matrix = np.array(
+        [[vaf_data[v][s] for v in reordered_variants] for s in reordered_samples],
+        dtype=float,
+    )
+
+    # Figure geometry: scale with matrix size
+    fig_w = max(14.0, n_variants * 0.5 + 2.0)
+    fig_h = max(8.0, n_samples * 0.8 + 2.5)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor="white")
+
+    # ── Heatmap with VAF values ──────────────────────────────────────────
+    from matplotlib.patches import Rectangle
+    
+    cmap = plt.cm.Blues
+    im = ax.imshow(
+        vaf_matrix, cmap=cmap, vmin=0, vmax=1,
+        aspect="auto", interpolation="nearest",
+    )
+    
+    # Draw white rectangles over cells with VAF == 0
+    for i in range(n_samples):
+        for j in range(n_variants):
+            if vaf_matrix[i, j] == 0.0:
+                rect = Rectangle((j - 0.5, i - 0.5), 1, 1, 
+                                fill=True, facecolor='white', edgecolor='none')
+                ax.add_patch(rect)
+
+    # Axis labels and ticks
+    ax.set_xticks(np.arange(n_variants))
+    ax.set_yticks(np.arange(n_samples))
+    ax.set_xticklabels(reordered_variants, rotation=45, ha="right", fontsize=7)
+    ax.set_yticklabels(reordered_samples, fontsize=9)
+
+    ax.set_xlabel("Variant", fontsize=10, fontweight="bold")
+    ax.set_ylabel("Sample ID", fontsize=10, fontweight="bold")
+
+    # Grid lines for cell delineation
+    ax.set_xticks(np.arange(n_variants) - 0.5, minor=True)
+    ax.set_yticks(np.arange(n_samples) - 0.5, minor=True)
+    ax.grid(which="minor", color="white", linestyle="-", linewidth=0.8)
+
+    # Add text annotations with VAF percentages
+    for i in range(n_samples):
+        for j in range(n_variants):
+            vaf = vaf_matrix[i, j]
+            if vaf > 0.0:
+                # Use white text for dark cells, dark text for light cells
+                text_color = "white" if vaf > 0.5 else "black"
+                ax.text(j, i, f"{vaf:.2f}", ha="center", va="center",
+                       color=text_color, fontsize=6, weight="bold")
+
+    # Remove top and right spines
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(length=0)
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("VAF", fontsize=10, fontweight="bold")
+    cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"{x:.2f}"))
+
+    # ── Title ────────────────────────────────────────────────────────────
+    title = f"{alias} — GL_DB Variant VAF Matrix (Clustered)\nShared variants only (≥2 samples)"
+    fig.suptitle(
+        title,
+        fontsize=10, fontweight="bold", y=0.98,
+    )
+
+    fig.tight_layout()
+    fig.savefig(output_path, bbox_inches="tight", dpi=150, facecolor="white")
+    plt.close(fig)
+    print(f"Variant-sample VAF heatmap saved to: {output_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +667,7 @@ def main() -> None:
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # Step 1 & 2: per-sample filtering and display
+    # Step 1: Per-sample filtering (VAF threshold applied)
     # ------------------------------------------------------------------
     filtered: dict[str, pl.DataFrame] = {}
     for sample_id, tsv_path in pcgr_files.items():
@@ -423,12 +689,17 @@ def main() -> None:
             print(f"  -> Saved: {tmp_path}")
 
     # ------------------------------------------------------------------
-    # Step 3 & 4: cross-reference and display
+    # Step 2: Complete GL_DB data per sample (no VAF threshold)
+    # ------------------------------------------------------------------
+    complete = load_complete_gl_db_data(pcgr_files)
+
+    # ------------------------------------------------------------------
+    # Step 3: Cross-reference (filtered ref → complete query) and display
     # ------------------------------------------------------------------
     print(f"\n{'='*70}")
-    print("Cross-reference: shared GL_DB variants across samples")
+    print("Cross-reference: filtered variants from ref found in complete query data")
     print(f"{'='*70}")
-    xref_table = build_cross_reference_table(filtered)
+    xref_table = build_cross_reference_table(filtered, complete)
     with pl.Config(tbl_rows=-1):
         print(xref_table)
 
@@ -437,24 +708,49 @@ def main() -> None:
     print(f"\nCross-reference table saved to: {xref_path}")
 
     # ------------------------------------------------------------------
-    # Step 5: intersection count matrix export
+    # Step 4: Intersection count matrix (filtered ref vs complete query)
     # ------------------------------------------------------------------
-    matrix = build_intersection_matrix(filtered)
+    matrix = build_intersection_matrix(filtered, complete)
     matrix_path = output_dir / f"{run_name}_GL_DB_intersection_matrix.tsv"
     matrix.write_csv(matrix_path, separator="\t")
 
     print(f"\n{'='*70}")
     print(f"Intersection matrix  ({len(filtered)} x {len(filtered)} samples)")
+    print(f"  Rows (ref)  : variants with AF_TUMOR <= {args.VAF_th}")
+    print(f"  Cols (query): all GL_DB variants (no threshold)")
     print(f"Saved to: {matrix_path}")
     print(f"{'='*70}")
     print(matrix)
 
     # ------------------------------------------------------------------
-    # Step 6: combined barplot + heatmap figure
+    # Step 5: Intersection heatmap figure (barplot + heatmap)
     # ------------------------------------------------------------------
     sample_counts = {sid: df.height for sid, df in filtered.items()}
     heatmap_path  = output_dir / f"{run_name}_GL_DB_intersection_heatmap.pdf"
     plot_intersection_heatmap(matrix, sample_counts, heatmap_path, run_name, args.VAF_th, args.alias)
+
+    # ------------------------------------------------------------------
+    # Step 6: VAF heatmap — relevant overlaps with actual VAF values
+    # ------------------------------------------------------------------
+    print(f"\n{'='*70}")
+    print("Building VAF heatmap for relevant overlap variants")
+    print(f"{'='*70}")
+
+    variant_ids, sample_ids, vaf_data = build_overlap_vaf_matrix(filtered, complete)
+    print(f"Relevant overlap variants: {len(variant_ids)}")
+
+    if len(variant_ids) < 2:
+        print(f"[INFO] Found {len(variant_ids)} relevant variant(s); minimum 2 required. Skipping VAF heatmap.")
+    else:
+        print(f"VAF matrix: {len(variant_ids)} variants x {len(sample_ids)} samples")
+        variant_order, sample_order = cluster_vaf_matrix(vaf_data, variant_ids, sample_ids)
+
+        vaf_heatmap_path = output_dir / f"{run_name}_GL_DB_variant_sample_heatmap.pdf"
+        plot_variant_sample_heatmap(
+            vaf_data, variant_ids, sample_ids,
+            variant_order, sample_order,
+            vaf_heatmap_path, args.alias,
+        )
 
 
 if __name__ == "__main__":
