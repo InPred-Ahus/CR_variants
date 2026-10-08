@@ -1,11 +1,12 @@
 [project]
 name = "cr-variants"
 version = "0.1.0"
-description = "Add your description here"
+description = "Cross-reference rare GL_DB germline-database variants across TSOPPI bioinformatics samples for contamination detection"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "patchworklib>=0.6.6",
-    "plotnine>=0.15.8",
     "polars>=1.44.2",
+    "matplotlib>=3.11.2",
+    "numpy>=1.26.0",
+    "scipy>=1.14.0",
 ]
