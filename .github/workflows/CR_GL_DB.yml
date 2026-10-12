@@ -40,10 +40,6 @@ jobs:
           --alias "Test_Run_Basic"                                                   \
           --output_dir TEST/cr_variants_test_basic
 
-    - name: Display intersection matrix
-      run: |
-        echo "=== Intersection Matrix ==="
-        cat TEST/cr_variants_test_basic/251211_NB552811_0117_AHTJM2BGYX_GL_DB_intersection_matrix.tsv
 
     - name: Run with custom VAF threshold
       run: |
