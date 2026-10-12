@@ -59,11 +59,13 @@ jobs:
           --output_dir TEST/cr_variants_test_tmp                                     \
           --tmp
 
+    - name: Run VAF threshold parameter sweep
+      run: bash run_vaf_sweep.sh
 
     - name: Upload test outputs
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: cr_variants-test-outputs
-        path: TEST/cr_variants_test_basic/
+        path: TEST/
         retention-days: 7
