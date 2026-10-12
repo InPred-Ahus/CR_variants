@@ -11,3 +11,9 @@ dependencies = [
     "scipy>=1.14.0",
     "pandas>=3.0.6",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
